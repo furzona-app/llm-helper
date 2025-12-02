@@ -1,0 +1,26 @@
+{
+  "name": "llm-helper",
+  "version": "1.0.0",
+  "description": "A package for Node.js focusing on providing a single unified API for interacting with different LLM engines.",
+  "main": "dist/index.js",
+  "files": ["dist"],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^24.10.1"
+  },
+  "dependencies": {
+    "@huggingface/gguf": "^0.3.2",
+    "@huggingface/jinja": "^0.5.3",
+    "@lmstudio/immer-with-plugins": "^10.1.1",
+    "@lmstudio/sdk": "^1.5.0",
+    "@modelcontextprotocol/sdk": "^1.23.0",
+    "nunjucks": "^3.2.4",
+    "zod": "^4.1.13"
+  }
+}
