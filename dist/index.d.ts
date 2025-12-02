@@ -1,6 +1,6 @@
 import { GGUFParseOutput } from "@huggingface/gguf";
 import { BaseLoadModelOpts, LLMActionOpts, LLMLoadModelConfig, LLMPredictionOpts, LMStudioClient, LMStudioClientConstructorOpts, LLM as LMStudioLLM } from "@lmstudio/sdk";
-import z, { ZodAny } from "zod";
+import { ZodAny } from "zod";
 declare function applyJinjaTemplate(template: string, vars: {
     messages?: object[];
     tools?: object[];
@@ -26,10 +26,114 @@ declare class LLM {
         role?: "system" | "user" | "assistant" | "tool";
         content: string;
     }[]): LLMChat;
+    complete(prompt: string): Promise<string>;
+    complete(prompt: string, opts: LLMCompletionPromptOptions): Promise<string>;
     toolToJson(tool: LLMTool): {
         name: string;
         description: string;
-        parameters: z.core.JSONSchema.JSONSchema | {
+        parameters: ({
+            anyOf: import("zod-to-json-schema").JsonSchema7DateType[];
+        } & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | ({
+            type: "object" | "array";
+        } & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | ({
+            type: ("string" | "number" | "boolean" | "integer" | "null") | ("string" | "number" | "boolean" | "integer" | "null")[];
+        } & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | ({
+            anyOf: import("zod-to-json-schema").JsonSchema7Type[];
+        } & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | (import("zod-to-json-schema").JsonSchema7UndefinedType & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | (import("zod-to-json-schema").JsonSchema7AnyType & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | ({
+            anyOf: [import("zod-to-json-schema").JsonSchema7Type, import("zod-to-json-schema").JsonSchema7NullType];
+        } & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | ({
+            type: [string, "null"];
+        } & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | (import("zod-to-json-schema").JsonSchema7AllOfType & {
+            title?: string;
+            default?: any;
+            description?: string;
+            markdownDescription?: string;
+        } & {
+            $schema?: string | undefined;
+            definitions?: {
+                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
+            };
+        }) | {
             [param: string]: object;
         };
     };
@@ -48,7 +152,7 @@ declare class LLMChat {
     addMessage(message: LLMMessage | string): LLMMessage;
     addMessages(messages: (LLMMessage | string)[]): void;
     prompt(prompt: string): Promise<LLMMessage[]>;
-    prompt(prompt: string, opts: LLMPromptOptions): Promise<LLMMessage[]>;
+    prompt(prompt: string, opts: LLMChatPromptOptions): Promise<LLMMessage[]>;
 }
 declare class LLMMessage {
     role?: "system" | "user" | "assistant" | "tool";
@@ -84,7 +188,7 @@ interface LLMTool {
         [parameter: string]: any;
     }) => string | null | undefined;
 }
-interface LLMPromptOptions {
+interface LLMChatPromptOptions {
     /** The prompt settings. */
     prompt?: string | {
         /** The prompt text. */
@@ -142,6 +246,10 @@ interface LLMPromptOptions {
      * (which you shouldn't but can), you can use this option to select a favorite/
      */
     engine?: null | "lmstudio" | "llamafile";
+    /**
+     * The maximum amount of tokens the model can generate.
+     */
+    maxTokens?: number;
     /** LM Studio settings. */
     lmStudio?: {
         chatOptions: LLMActionOpts;
@@ -150,4 +258,27 @@ interface LLMPromptOptions {
     /** Llamafile settings. */
     llamafile?: {};
 }
-export { LLM, LLMChat, LLMMessage, LLMTool, LLMPromptOptions, applyJinjaTemplate };
+interface LLMCompletionPromptOptions {
+    /** The prompt settings. */
+    prompt?: string | {
+        /** The prompt text. */
+        text?: string;
+    };
+    /**
+     * Overrides the engine used for generation to be LM Studio. By default, the engine used
+     * is the one last loaded inside an `LLM` class. However, if you loaded multiple engines
+     * (which you shouldn't but can), you can use this option to select a favorite/
+     */
+    engine?: null | "lmstudio" | "llamafile";
+    /**
+     * The maximum amount of tokens the model can generate.
+     */
+    maxTokens?: number;
+    /** LM Studio settings. */
+    lmStudio?: {
+        completionOptions: LLMPredictionOpts;
+    };
+    /** Llamafile settings. */
+    llamafile?: {};
+}
+export { LLM, LLMChat, LLMMessage, LLMTool, LLMChatPromptOptions, LLMCompletionPromptOptions, applyJinjaTemplate };

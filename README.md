@@ -8,7 +8,7 @@ Here are the different engines supported and how much is implemented:
 
 | Engine    | Loading | Chat | Completion | Manual tool handling | Live callback |
 | --------- | ------- | ---- | ---------- | -------------------- | ------------- |
-| LM Studio | ✅       | ✅    | ❌          | ❌                    | ❌             |
+| LM Studio | ✅       | ✅    | ✅          | ❌                    | ❌             |
 | llamafile | ❌       | ❌    | ❌          | ❌                    | ❌             |
 
 ## To-Do
@@ -18,7 +18,7 @@ Here's a list of things that have to be done (high-to-low priority):
 | Status | Feature              | Description                                                                                         |
 | ------ | -------------------- | --------------------------------------------------------------------------------------------------- |
 | ✅      | Tools                | Allow sending tools and make the tools get called upon request.                                     |
-| ❌      | Completion           | Allow completing text instead of only being confined to full chats.                                 |
+| ✅      | Completion           | Allow completing text instead of only being confined to full chats.                                 |
 | ❌      | Manual tool handling | Handle tool calls manually. Especially needed for llamafile, since it doesn't support tool calling. |
 | ❌      | MCP servers          | Allow sending MCP servers as tools (connect to server, gather tools, and call when requested).      |
 | ❌      | Images               | Be able to send images in a chat.                                                                   |
@@ -36,10 +36,12 @@ const { LLM } = require("llm-helper");
   const llm = new LLM("./Qwen3-4B-Q4_K_M.gguf");
   await llm.load();
 
+  // Either:
   // LM Studio
   await llm.loadLMStudio();
-  // llamafile (not supported yet)
-  await llm.loadLlamafile();
+  // Or (not supported yet):
+  // llamafile
+  //await llm.loadLlamafile();
 })();
 ```
 
@@ -61,7 +63,9 @@ const { LLM } = require("llm-helper");
 
 You may also combine both methods, loading the GGUF first and then changing the ID (though there shouldn't be any need to).
 
-### Creating a chat
+### Chats
+
+#### Creating a chat
 
 You may create a chat like this:
 
@@ -76,7 +80,7 @@ const chat = llm.chat();
 chat.addMessage(new LLMMessage("system", "You are Qwen."));
 ```
 
-### Generating a message
+#### Generating a message
 
 ```js
 const messages = await chat.prompt("Who are you?");
@@ -88,3 +92,47 @@ for (let i = 0; i < messages.length; i++) {
 ```
 
 `messages` is an array of `LLMMessage` objects, usually containing only one assistant message. However, when an assistant calls a tool (and it is automatically handled by the engine), there may be an assistant message, a tool message, and another assistant message, for example.
+
+### Adding tools
+
+When generating a response, you can pass tools in the options object. To provide a schema for the parameters, you should use `zod`. If you get an error using `zod`, downgrade your `zod` version to `^3.25.76`.
+
+```js
+const z = require("zod");
+
+const testTool = {
+  id: "test_tool",
+  name: "A test tool",
+  description: "This is a test tool.",
+  parameters: {
+    password: z.string().describe("The tool's password.")
+  },
+
+  call({password}) {
+    if (password == "TestPassword") {
+      return "The password is correct!";
+    } else {
+      return "The password is incorrect.";
+    }
+  }
+};
+
+const messages = await chat.prompt("Call the test tool with the password 'TestPassword'.", {
+  tools: [testTool]
+});
+
+for (let i = 0; i < messages.length; i++) {
+  const message = messages[i];
+  console.log(`\n${message.role}: ${message.content}`);
+}
+```
+
+### Completion
+
+To complete text, you can use `llm.complete` like so:
+
+```js
+const completion = await llm.complete("To bake a cake,", {maxTokens: 128});
+
+console.log("To bake a cake," + completion);
+```

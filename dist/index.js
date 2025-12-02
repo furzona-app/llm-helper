@@ -8,6 +8,7 @@ exports.applyJinjaTemplate = applyJinjaTemplate;
 const gguf_1 = require("@huggingface/gguf");
 const sdk_1 = require("@lmstudio/sdk");
 const zod_1 = __importDefault(require("zod"));
+const zod_to_json_schema_1 = require("zod-to-json-schema");
 const jinja_1 = require("@huggingface/jinja");
 function applyJinjaTemplate(template, vars) {
     return new jinja_1.Template(template).render({
@@ -74,8 +75,37 @@ For each function call, return a json object with function name and arguments wi
         }
         return chat;
     }
+    async complete(prompt, opts) {
+        let text = prompt;
+        let engine = this.lastEngine;
+        let maxTokens = undefined;
+        if (typeof opts == "object") {
+            if (typeof opts.prompt == "object") {
+                text = opts.prompt.text ?? prompt;
+            }
+            else {
+                text = opts.prompt ?? prompt;
+            }
+            engine = opts.engine ?? this.lastEngine;
+            maxTokens = opts.maxTokens;
+        }
+        if (engine == "lmstudio") {
+            if (!this.lmsModel) {
+                throw new Error("LM Studio model is not loaded");
+            }
+            const options = opts?.lmStudio?.completionOptions ?? {};
+            if (maxTokens != undefined) {
+                options.maxTokens = maxTokens;
+            }
+            const completed = await this.lmsModel.complete(text, options);
+            return completed.content;
+        }
+        else {
+            throw new Error("Engine unsupported");
+        }
+    }
     toolToJson(tool) {
-        const parameters = tool.parameters ? zod_1.default.toJSONSchema(zod_1.default.object(tool.parameters)) : tool.customParameters;
+        const parameters = tool.parameters ? (0, zod_to_json_schema_1.zodToJsonSchema)(zod_1.default.object(tool.parameters)) : tool.customParameters;
         delete parameters.$schema;
         return {
             name: tool.id,
@@ -137,6 +167,7 @@ class LLMChat {
         let role = "user";
         let engine = this.model.lastEngine;
         let vars = {};
+        let maxTokens = undefined;
         if (typeof opts == "object") {
             if (typeof opts.prompt == "object") {
                 text = opts.prompt.text ?? prompt;
@@ -148,6 +179,7 @@ class LLMChat {
                 text = opts.prompt ?? prompt;
             }
             engine = opts.engine ?? this.model.lastEngine;
+            maxTokens = opts.maxTokens;
             for (let i = 0; i < opts?.tools?.length; i++) {
                 const toolOpts = opts.tools[i];
                 if (engine == "lmstudio") {
@@ -184,7 +216,7 @@ class LLMChat {
             }
         }
         const result = [];
-        this.addMessage(new LLMMessage(role, prompt));
+        this.addMessage(new LLMMessage(role, text));
         if (engine == "lmstudio") {
             if (!this.model.lmsModel) {
                 throw new Error("LM Studio model is not loaded");
@@ -225,6 +257,9 @@ class LLMChat {
                     result.push(newMessage);
                     this.addMessage(newMessage);
                 };
+                if (maxTokens != undefined) {
+                    options.maxTokens = maxTokens;
+                }
                 const chat = sdk_1.Chat.empty();
                 for (let i = 0; i < this.messages.length; i++) {
                     const message = this.messages[i];
@@ -245,11 +280,17 @@ class LLMChat {
                     ...vars
                 });
                 const options = opts?.lmStudio?.completionOptions ?? {};
+                if (maxTokens != undefined) {
+                    options.maxTokens = maxTokens;
+                }
                 const completed = await this.model.lmsModel.complete(completionPrompt, options);
                 const newMessage = new LLMMessage("assistant", completed.content);
                 result.push(newMessage);
                 this.addMessage(newMessage);
             }
+        }
+        else {
+            throw new Error("Engine unsupported");
         }
         return result;
     }

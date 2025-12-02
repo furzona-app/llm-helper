@@ -1,6 +1,7 @@
 import { gguf, GGUFParseOutput } from "@huggingface/gguf"
 import { BaseLoadModelOpts, Chat, ChatMessage, LLMActionOpts, LLMLoadModelConfig, LLMPredictionConfigInput, LLMPredictionOpts, LLMToolParameters, LMStudioClient, LMStudioClientConstructorOpts, LLM as LMStudioLLM, tool } from "@lmstudio/sdk";
 import z, { ZodAny } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { Template } from "@huggingface/jinja";
 
 function applyJinjaTemplate(template: string, vars: {messages?: object[], tools?: object[], add_generation_prompt?: boolean, [varName: string]: any}) : string {
@@ -86,8 +87,44 @@ For each function call, return a json object with function name and arguments wi
     return chat;
   }
 
+  async complete(prompt: string): Promise<string>;
+  async complete(prompt: string, opts: LLMCompletionPromptOptions): Promise<string>;
+  async complete(prompt: string, opts?: LLMCompletionPromptOptions): Promise<string> {
+    let text = prompt;
+    let engine = this.lastEngine;
+    let maxTokens = undefined;
+
+    if (typeof opts == "object") {
+      if (typeof opts.prompt == "object") {
+        text = opts.prompt.text ?? prompt;
+      } else {
+        text = opts.prompt ?? prompt;
+      }
+
+      engine = opts.engine ?? this.lastEngine;
+      maxTokens = opts.maxTokens;
+    }
+
+    if (engine == "lmstudio") {
+      if (!this.lmsModel) {
+        throw new Error("LM Studio model is not loaded");
+      }
+
+      const options = opts?.lmStudio?.completionOptions ?? {};
+
+      if (maxTokens != undefined) {
+        options.maxTokens = maxTokens;
+      }
+      
+      const completed = await this.lmsModel.complete(text, options);
+      return completed.content;
+    } else {
+      throw new Error("Engine unsupported");
+    }
+  }
+
   toolToJson(tool: LLMTool) {
-    const parameters = tool.parameters ? z.toJSONSchema(z.object(tool.parameters)) : tool.customParameters;
+    const parameters = tool.parameters ? zodToJsonSchema(z.object(tool.parameters)) : tool.customParameters;
     delete parameters.$schema;
 
     return {
@@ -152,8 +189,8 @@ class LLMChat {
   }
   
   async prompt(prompt: string): Promise<LLMMessage[]>;
-  async prompt(prompt: string, opts: LLMPromptOptions): Promise<LLMMessage[]>;
-  async prompt(prompt: string, opts?: LLMPromptOptions): Promise<LLMMessage[]> {
+  async prompt(prompt: string, opts: LLMChatPromptOptions): Promise<LLMMessage[]>;
+  async prompt(prompt: string, opts?: LLMChatPromptOptions): Promise<LLMMessage[]> {
     if (!(this.model instanceof LLM)) {
       throw new Error("`model` is not a valid model");
     }
@@ -164,6 +201,7 @@ class LLMChat {
     let role = "user";
     let engine = this.model.lastEngine;
     let vars = {};
+    let maxTokens = undefined;
 
     if (typeof opts == "object") {
       if (typeof opts.prompt == "object") {
@@ -176,6 +214,7 @@ class LLMChat {
       }
 
       engine = opts.engine ?? this.model.lastEngine;
+      maxTokens = opts.maxTokens;
 
       for (let i = 0; i < opts?.tools?.length; i++) {
         const toolOpts = opts.tools[i];
@@ -212,7 +251,7 @@ class LLMChat {
     }
     
     const result = [];
-    this.addMessage(new LLMMessage(role, prompt));
+    this.addMessage(new LLMMessage(role, text));
 
     if (engine == "lmstudio") {
       if (!this.model.lmsModel) {
@@ -259,6 +298,10 @@ class LLMChat {
           result.push(newMessage);
           this.addMessage(newMessage);
         };
+
+        if (maxTokens != undefined) {
+          options.maxTokens = maxTokens;
+        }
         
         const chat = Chat.empty();
         for (let i = 0; i < this.messages.length; i++) {
@@ -281,12 +324,19 @@ class LLMChat {
         });
 
         const options = opts?.lmStudio?.completionOptions ?? {};
+
+        if (maxTokens != undefined) {
+          options.maxTokens = maxTokens;
+        }
+        
         const completed = await this.model.lmsModel.complete(completionPrompt, options);
 
         const newMessage = new LLMMessage("assistant", completed.content);
         result.push(newMessage);
         this.addMessage(newMessage);
       }
+    } else {
+      throw new Error("Engine unsupported");
     }
     
     return result;
@@ -344,7 +394,7 @@ interface LLMTool {
   call: (params: {[parameter: string]: any}) => string | null | undefined
 }
 
-interface LLMPromptOptions {
+interface LLMChatPromptOptions {
   /** The prompt settings. */
   prompt?: string | {
     /** The prompt text. */
@@ -406,6 +456,11 @@ interface LLMPromptOptions {
    */
   engine?: null | "lmstudio" | "llamafile",
 
+  /**
+   * The maximum amount of tokens the model can generate.
+   */
+  maxTokens?: number,
+
   /** LM Studio settings. */
   lmStudio?: {
     chatOptions: LLMActionOpts,
@@ -418,4 +473,34 @@ interface LLMPromptOptions {
   }
 }
 
-export { LLM, LLMChat, LLMMessage, LLMTool, LLMPromptOptions, applyJinjaTemplate };
+interface LLMCompletionPromptOptions {
+  /** The prompt settings. */
+  prompt?: string | {
+    /** The prompt text. */
+    text?: string
+  },
+
+  /**
+   * Overrides the engine used for generation to be LM Studio. By default, the engine used
+   * is the one last loaded inside an `LLM` class. However, if you loaded multiple engines
+   * (which you shouldn't but can), you can use this option to select a favorite/
+   */
+  engine?: null | "lmstudio" | "llamafile",
+
+  /**
+   * The maximum amount of tokens the model can generate.
+   */
+  maxTokens?: number,
+
+  /** LM Studio settings. */
+  lmStudio?: {
+    completionOptions: LLMPredictionOpts
+  },
+
+  /** Llamafile settings. */
+  llamafile?: {
+    
+  }
+}
+
+export { LLM, LLMChat, LLMMessage, LLMTool, LLMChatPromptOptions, LLMCompletionPromptOptions, applyJinjaTemplate };
