@@ -3,6 +3,7 @@ import { BaseLoadModelOpts, Chat, ChatMessage, LLMActionOpts, LLMLoadModelConfig
 import z, { ZodAny } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { Template } from "@huggingface/jinja";
+import { randomUUID } from "crypto";
 
 function applyJinjaTemplate(template: string, vars: {messages?: object[], tools?: object[], add_generation_prompt?: boolean, [varName: string]: any}) : string {
   return new Template(template).render({
@@ -150,12 +151,23 @@ For each function call, return a json object with function name and arguments wi
 class LLMChat {
   model?: LLM;
   messages: LLMMessage[];
+  generating: boolean;
 
   constructor();
   constructor(model: LLM);
   constructor(model?: LLM) {
     this.model = model;
     this.messages = [];
+  }
+
+  clone() {
+    const chat = new LLMChat();
+
+    for (let i = 0; i < this.messages.length; i++) {
+      chat.addMessage(this.messages[i].clone());
+    }
+
+    return chat;
   }
 
   addMessage(message: LLMMessage | string): LLMMessage {
@@ -188,9 +200,9 @@ class LLMChat {
     }
   }
   
-  async prompt(prompt: string): Promise<LLMMessage[]>;
-  async prompt(prompt: string, opts: LLMChatPromptOptions): Promise<LLMMessage[]>;
-  async prompt(prompt: string, opts?: LLMChatPromptOptions): Promise<LLMMessage[]> {
+  async prompt(prompt: string | null): Promise<LLMMessage[]>;
+  async prompt(prompt: string | null, opts: LLMChatPromptOptions): Promise<LLMMessage[]>;
+  async prompt(prompt: string | null, opts?: LLMChatPromptOptions): Promise<LLMMessage[]> {
     if (!(this.model instanceof LLM)) {
       throw new Error("`model` is not a valid model");
     }
@@ -251,13 +263,33 @@ class LLMChat {
     }
     
     const result = [];
-    this.addMessage(new LLMMessage(role, text));
 
     if (engine == "lmstudio") {
       if (!this.model.lmsModel) {
         throw new Error("LM Studio model is not loaded");
       }
+    }
 
+    if (this.generating) {
+      throw new Error("Chat can only do one generation at a time (use `clone()` for multiple generations)");
+    }
+
+    this.generating = true;
+    if (text != null) {
+      this.addMessage(new LLMMessage(role, text));
+    }
+    
+    let lastMessageIndex = -1;
+    const isNewMessage = () => {
+      if (result.length > lastMessageIndex) {
+        lastMessageIndex = result.length;
+        return true;
+      }
+
+      return false;
+    };
+
+    if (engine == "lmstudio") {
       if (nativeLevel == 0 || nativeLevel == 1) {
         let messages = [...this.messages.map((message) => ({role: message.role, content: message.content}))];
 
@@ -269,7 +301,7 @@ class LLMChat {
           }
         }
         
-        const options = opts?.lmStudio?.chatOptions ?? {};
+        const options = {...(opts?.lmStudio?.chatOptions ?? {})};
         options.onMessage = (message) => {
           if (typeof opts?.lmStudio?.chatOptions?.onMessage == "function") {
             opts.lmStudio.chatOptions.onMessage(message);
@@ -282,7 +314,7 @@ class LLMChat {
           
           for (let i = 0; i < toolRequests.length; i++) {
             const req = toolRequests[i];
-            content += `${content == "" ? "" : "\n"}<tool_call>\n${JSON.stringify({name: req.name, arguments: req.arguments})}\n</tool_call>`;
+            content += `<tool_call>\n${JSON.stringify({name: req.name, arguments: req.arguments})}\n</tool_call>`;
           }
 
           if (toolResponses.length == 1 && role == "tool") {
@@ -290,7 +322,7 @@ class LLMChat {
           } else {
             for (let i = 0; i < toolResponses.length; i++) {
               const res = toolResponses[i];
-              content += `${content == "" ? "" : "\n"}<tool_response>\n${res.content}\n</tool_response>`;
+              content += `${content == "" ? "" : "\n\n"}<tool_response>\n${res.content}\n</tool_response>`;
             }
           }
 
@@ -298,6 +330,63 @@ class LLMChat {
           result.push(newMessage);
           this.addMessage(newMessage);
         };
+
+        if (opts?.onFirstToken) {
+          let started = false;
+
+          options.onFirstToken = (roundIndex) => {
+            if (typeof opts.lmStudio?.chatOptions?.onFirstToken == "function") {
+              opts.lmStudio.chatOptions.onFirstToken(roundIndex);
+            }
+
+            if (!started) {
+              started = true;
+              opts.onFirstToken();
+            }
+          };
+        }
+
+        if (opts?.onToken) {
+          options.onPredictionFragment = (fragment) => {
+            if (typeof opts.lmStudio?.chatOptions?.onPredictionFragment == "function") {
+              opts.lmStudio.chatOptions.onPredictionFragment(fragment);
+            }
+
+            opts.onToken(fragment.content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: false});
+          };
+          
+          options.onToolCallRequestStart = (roundIndex, callId, info) => {
+            if (typeof opts.lmStudio?.chatOptions?.onToolCallRequestStart == "function") {
+              opts.lmStudio.chatOptions.onToolCallRequestStart(roundIndex, callId, info);
+            }
+
+            opts.onToken("<tool_call>\n", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+          };
+          
+          options.onToolCallRequestNameReceived = (roundIndex, callId, name) => {
+            if (typeof opts.lmStudio?.chatOptions?.onToolCallRequestNameReceived == "function") {
+              opts.lmStudio.chatOptions.onToolCallRequestNameReceived(roundIndex, callId, name);
+            }
+
+            opts.onToken("{\"name\":" + JSON.stringify(name) + ",\"arguments\":", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+          };
+          
+          options.onToolCallRequestArgumentFragmentGenerated = (roundIndex, callId, content) => {
+            if (typeof opts.lmStudio?.chatOptions?.onToolCallRequestArgumentFragmentGenerated == "function") {
+              opts.lmStudio.chatOptions.onToolCallRequestArgumentFragmentGenerated(roundIndex, callId, content);
+            }
+
+            opts.onToken(content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+          };
+          
+          options.onToolCallRequestFinalized = (roundIndex, callId, info) => {
+            if (typeof opts.lmStudio?.chatOptions?.onToolCallRequestFinalized == "function") {
+              opts.lmStudio.chatOptions.onToolCallRequestFinalized(roundIndex, callId, info);
+            }
+
+            opts.onToken("}\n</tool_call>", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+          };
+        }
 
         if (maxTokens != undefined) {
           options.maxTokens = maxTokens;
@@ -323,7 +412,30 @@ class LLMChat {
           ...vars
         });
 
-        const options = opts?.lmStudio?.completionOptions ?? {};
+        const options = {...(opts?.lmStudio?.completionOptions ?? {})};
+
+        if (opts?.onFirstToken) {
+          options.onFirstToken = () => {
+            if (typeof opts.lmStudio?.completionOptions?.onFirstToken == "function") {
+              opts.lmStudio.completionOptions.onFirstToken();
+            }
+
+            opts.onFirstToken();
+          };
+        }
+
+        if (opts?.onToken) {
+          let lastMessageIndex = -1;
+
+          options.onPredictionFragment = (fragment) => {
+            if (typeof opts.lmStudio?.completionOptions?.onPredictionFragment == "function") {
+              opts.lmStudio.completionOptions.onPredictionFragment(fragment);
+            }
+
+            opts.onToken(fragment.content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: false});
+            lastMessageIndex = result.length;
+          };
+        }
 
         if (maxTokens != undefined) {
           options.maxTokens = maxTokens;
@@ -338,6 +450,9 @@ class LLMChat {
     } else {
       throw new Error("Engine unsupported");
     }
+
+    this.generating = false;
+    opts?.onFinished?.(result);
     
     return result;
   }
@@ -361,6 +476,10 @@ class LLMMessage {
 
     this.role = role as "system" | "user" | "assistant" | "tool";
     this.content = content;
+  }
+
+  clone(): LLMMessage {
+    return new LLMMessage(this.role, this.content);
   }
 
   resolveRole(history: LLMMessage[]): void {
@@ -450,16 +569,19 @@ interface LLMChatPromptOptions {
   tools?: LLMTool[],
 
   /**
-   * Overrides the engine used for generation to be LM Studio. By default, the engine used
+   * Overrides the engine used for generation. By default, the engine used
    * is the one last loaded inside an `LLM` class. However, if you loaded multiple engines
-   * (which you shouldn't but can), you can use this option to select a favorite/
+   * (which you shouldn't but can), you can use this option to select a favorite.
    */
   engine?: null | "lmstudio" | "llamafile",
 
   /**
-   * The maximum amount of tokens the model can generate.
+   * Universal generation options.
    */
   maxTokens?: number,
+  onFirstToken?: () => any,
+  onToken?: (token: string, metadata: {messageIndex: number, isNewMessage: boolean, isToolCall: boolean}) => any,
+  onFinished?: (messages: LLMMessage[]) => any,
 
   /** LM Studio settings. */
   lmStudio?: {

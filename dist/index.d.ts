@@ -147,18 +147,21 @@ declare class LLM {
 declare class LLMChat {
     model?: LLM;
     messages: LLMMessage[];
+    generating: boolean;
     constructor();
     constructor(model: LLM);
+    clone(): LLMChat;
     addMessage(message: LLMMessage | string): LLMMessage;
     addMessages(messages: (LLMMessage | string)[]): void;
-    prompt(prompt: string): Promise<LLMMessage[]>;
-    prompt(prompt: string, opts: LLMChatPromptOptions): Promise<LLMMessage[]>;
+    prompt(prompt: string | null): Promise<LLMMessage[]>;
+    prompt(prompt: string | null, opts: LLMChatPromptOptions): Promise<LLMMessage[]>;
 }
 declare class LLMMessage {
     role?: "system" | "user" | "assistant" | "tool";
     content: string;
     constructor(content: string);
     constructor(role: string, content: string);
+    clone(): LLMMessage;
     resolveRole(history: LLMMessage[]): void;
 }
 interface LLMTool {
@@ -241,15 +244,22 @@ interface LLMChatPromptOptions {
     /** Optional tools to make available to the model. */
     tools?: LLMTool[];
     /**
-     * Overrides the engine used for generation to be LM Studio. By default, the engine used
+     * Overrides the engine used for generation. By default, the engine used
      * is the one last loaded inside an `LLM` class. However, if you loaded multiple engines
-     * (which you shouldn't but can), you can use this option to select a favorite/
+     * (which you shouldn't but can), you can use this option to select a favorite.
      */
     engine?: null | "lmstudio" | "llamafile";
     /**
-     * The maximum amount of tokens the model can generate.
+     * Universal generation options.
      */
     maxTokens?: number;
+    onFirstToken?: () => any;
+    onToken?: (token: string, metadata: {
+        messageIndex: number;
+        isNewMessage: boolean;
+        isToolCall: boolean;
+    }) => any;
+    onFinished?: (messages: LLMMessage[]) => any;
     /** LM Studio settings. */
     lmStudio?: {
         chatOptions: LLMActionOpts;

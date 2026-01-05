@@ -8,7 +8,7 @@ Here are the different engines supported and how much is implemented:
 
 | Engine    | Loading | Chat | Completion | Manual tool handling | Live callback |
 | --------- | ------- | ---- | ---------- | -------------------- | ------------- |
-| LM Studio | ✅       | ✅    | ✅          | ❌                    | ❌             |
+| LM Studio | ✅       | ✅    | ✅          | ❌                    | ✅             |
 | llamafile | ❌       | ❌    | ❌          | ❌                    | ❌             |
 
 ## To-Do
@@ -93,7 +93,7 @@ for (let i = 0; i < messages.length; i++) {
 
 `messages` is an array of `LLMMessage` objects, usually containing only one assistant message. However, when an assistant calls a tool (and it is automatically handled by the engine), there may be an assistant message, a tool message, and another assistant message, for example.
 
-### Adding tools
+#### Adding tools
 
 When generating a response, you can pass tools in the options object. To provide a schema for the parameters, you should use `zod`. If you get an error using `zod`, downgrade your `zod` version to `^3.25.76`.
 
