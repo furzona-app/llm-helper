@@ -15,6 +15,7 @@ declare class LLM {
     lastEngine: "lmstudio" | "llamafile";
     lmsClient?: LMStudioClient;
     lmsModel?: LMStudioLLM;
+    lmsModelOpts?: BaseLoadModelOpts<LLMLoadModelConfig>;
     constructor();
     constructor(path: string);
     load(): Promise<void>;
@@ -249,9 +250,6 @@ interface LLMChatPromptOptions {
      * (which you shouldn't but can), you can use this option to select a favorite.
      */
     engine?: null | "lmstudio" | "llamafile";
-    /**
-     * Universal generation options.
-     */
     maxTokens?: number;
     onFirstToken?: () => any;
     onToken?: (token: string, metadata: {
@@ -262,6 +260,7 @@ interface LLMChatPromptOptions {
     onFinished?: (messages: LLMMessage[]) => any;
     /** LM Studio settings. */
     lmStudio?: {
+        autoReload: boolean;
         chatOptions: LLMActionOpts;
         completionOptions: LLMPredictionOpts;
     };
@@ -280,12 +279,13 @@ interface LLMCompletionPromptOptions {
      * (which you shouldn't but can), you can use this option to select a favorite/
      */
     engine?: null | "lmstudio" | "llamafile";
-    /**
-     * The maximum amount of tokens the model can generate.
-     */
     maxTokens?: number;
+    onFirstToken?: () => any;
+    onToken?: (token: string) => any;
+    onFinished?: (text: string) => any;
     /** LM Studio settings. */
     lmStudio?: {
+        autoReload: boolean;
         completionOptions: LLMPredictionOpts;
     };
     /** Llamafile settings. */

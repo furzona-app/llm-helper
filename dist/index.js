@@ -27,6 +27,7 @@ class LLM {
     lastEngine;
     lmsClient;
     lmsModel;
+    lmsModelOpts;
     constructor(path) {
         this.path = path;
         this.toolPrompt = (tools) => `
@@ -58,6 +59,7 @@ For each function call, return a json object with function name and arguments wi
         }
         this.lmsClient = new sdk_1.LMStudioClient(clientOpts);
         this.lmsModel = await this.lmsClient.llm.model(this.id, modelOpts);
+        this.lmsModelOpts = modelOpts;
         this.lastEngine = "lmstudio";
     }
     chat(messages) {
@@ -94,10 +96,39 @@ For each function call, return a json object with function name and arguments wi
                 throw new Error("LM Studio model is not loaded");
             }
             const options = opts?.lmStudio?.completionOptions ?? {};
+            if (opts?.onFirstToken) {
+                options.onFirstToken = () => {
+                    if (typeof opts.lmStudio?.completionOptions?.onFirstToken == "function") {
+                        opts.lmStudio.completionOptions.onFirstToken();
+                    }
+                    opts.onFirstToken();
+                };
+            }
+            if (opts?.onToken) {
+                options.onPredictionFragment = (fragment) => {
+                    if (typeof opts.lmStudio?.completionOptions?.onPredictionFragment == "function") {
+                        opts.lmStudio.completionOptions.onPredictionFragment(fragment);
+                    }
+                    opts.onToken(fragment.content);
+                };
+            }
             if (maxTokens != undefined) {
                 options.maxTokens = maxTokens;
             }
-            const completed = await this.lmsModel.complete(text, options);
+            let completed;
+            try {
+                completed = await this.lmsModel.complete(text, options);
+            }
+            catch (e) {
+                if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
+                    this.lmsModel = await this.lmsClient.llm.model(this.id, this.lmsModelOpts);
+                    completed = await this.lmsModel.complete(text, options);
+                }
+                else {
+                    throw e;
+                }
+            }
+            opts?.onFinished?.(completed.content);
             return completed.content;
         }
         else {
@@ -338,7 +369,18 @@ class LLMChat {
                         chat.append(message.role, message.content);
                     }
                 }
-                await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools : [], options);
+                try {
+                    await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools : [], options);
+                }
+                catch (e) {
+                    if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
+                        this.model.lmsModel = await this.model.lmsClient.llm.model(this.model.id, this.model.lmsModelOpts);
+                        await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools : [], options);
+                    }
+                    else {
+                        throw e;
+                    }
+                }
             }
             else if (nativeLevel == 2) {
                 const completionPrompt = this.model.applyChatTemplate({
@@ -369,7 +411,19 @@ class LLMChat {
                 if (maxTokens != undefined) {
                     options.maxTokens = maxTokens;
                 }
-                const completed = await this.model.lmsModel.complete(completionPrompt, options);
+                let completed;
+                try {
+                    completed = await this.model.lmsModel.complete(completionPrompt, options);
+                }
+                catch (e) {
+                    if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
+                        this.model.lmsModel = await this.model.lmsClient.llm.model(this.model.id, this.model.lmsModelOpts);
+                        completed = await this.model.lmsModel.complete(completionPrompt, options);
+                    }
+                    else {
+                        throw e;
+                    }
+                }
                 const newMessage = new LLMMessage("assistant", completed.content);
                 result.push(newMessage);
                 this.addMessage(newMessage);
