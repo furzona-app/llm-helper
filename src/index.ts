@@ -262,6 +262,7 @@ class LLMChat {
     let engine = this.model.lastEngine;
     let vars = {};
     let maxTokens = undefined;
+    let images: LLMImage[] = [];
 
     if (typeof opts == "object") {
       if (typeof opts.prompt == "object") {
@@ -269,6 +270,7 @@ class LLMChat {
         role = opts.prompt.role ?? "user";
         nativeLevel = opts.prompt.nativeLevel ?? 0;
         vars = opts.prompt.vars ?? {};
+        images = opts.prompt.images ?? [];
       } else {
         text = opts.prompt ?? prompt;
       }
@@ -324,7 +326,7 @@ class LLMChat {
 
     this.generating = true;
     if (text != null) {
-      this.addMessage(new LLMMessage(role, text));
+      this.addMessage(new LLMMessage(role, text).withImages(...images));
     }
     
     let lastMessageIndex = -1;
@@ -665,6 +667,8 @@ interface LLMChatPromptOptions {
     text?: string,
     /** The role. This should always either be "user" or "tool" to prevent confusing the model. */
     role?: "system" | "user" | "assistant" | "tool",
+    /** Images to send with the message. */
+    images?: LLMImage[],
     /**
      * Determines how the context and prompt should be formatted. There are 3 native levels:
      * 
