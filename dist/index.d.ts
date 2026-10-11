@@ -67,18 +67,28 @@ declare class LLMMessage {
     resolveRole(history: LLMMessage[]): void;
 }
 type LLMMessageStats = LLMPredictionStats;
-interface LLMImage {
+type LLMImage = {
     /** The type of image link (file or base64). */
     type: "file" | "base64";
+    /** ID of the image. This field is automatically filled by llm-helper and used for caching the file handle. */
+    id?: string;
+} & (LLMImageFile | LLMImageBase64);
+interface LLMImageFile {
+    type: "file";
+    /** The file path. */
+    content: string;
+    /** ID of the image. This field is automatically filled by llm-helper and used for caching the file handle. */
+    id?: string;
+}
+interface LLMImageBase64 {
+    type: "base64";
     /**
      * The filename. You only have to specify this if using `base64` type.
      * If this is not done, a random filename will be assigned.
      */
-    name: string;
-    /** The contents of the file, either as a file path or base64 stream. */
+    name?: string;
+    /** The base64 stream. */
     content: string;
-    /** ID of the image. This field is automatically filled by llm-helper and used for caching the file handle. */
-    id?: string;
 }
 interface LLMTool {
     /** The identifier the model will see and call. */
