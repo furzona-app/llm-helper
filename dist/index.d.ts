@@ -124,6 +124,8 @@ interface LLMChatPromptOptions {
         text?: string;
         /** The role. This should always either be "user" or "tool" to prevent confusing the model. */
         role?: "system" | "user" | "assistant" | "tool";
+        /** Images to send with the message. */
+        images?: LLMImage[];
         /**
          * Determines how the context and prompt should be formatted. There are 3 native levels:
          *

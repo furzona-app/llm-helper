@@ -218,12 +218,14 @@ class LLMChat {
         let engine = this.model.lastEngine;
         let vars = {};
         let maxTokens = undefined;
+        let images = [];
         if (typeof opts == "object") {
             if (typeof opts.prompt == "object") {
                 text = opts.prompt.text ?? prompt;
                 role = opts.prompt.role ?? "user";
                 nativeLevel = opts.prompt.nativeLevel ?? 0;
                 vars = opts.prompt.vars ?? {};
+                images = opts.prompt.images ?? [];
             }
             else {
                 text = opts.prompt ?? prompt;
@@ -276,7 +278,7 @@ class LLMChat {
         }
         this.generating = true;
         if (text != null) {
-            this.addMessage(new LLMMessage(role, text));
+            this.addMessage(new LLMMessage(role, text).withImages(...images));
         }
         let lastMessageIndex = -1;
         const isNewMessage = () => {
