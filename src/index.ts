@@ -1,6 +1,6 @@
 import { gguf, GGUFParseOutput } from "@huggingface/gguf"
-import { BaseLoadModelOpts, Chat, ChatMessage, LLMActionOpts, LLMLoadModelConfig, LLMPredictionOpts, LLMPredictionStats, LLMToolParameters, LMStudioClient, LMStudioClientConstructorOpts, LLM as LMStudioLLM, tool } from "@lmstudio/sdk";
-import z, { ZodAny } from "zod";
+import { BaseLoadModelOpts, Chat, ChatMessage, FileHandle, LLMActionOpts, LLMLoadModelConfig, LLMPredictionOpts, LLMPredictionStats, LLMToolParameters, LMStudioClient, LMStudioClientConstructorOpts, LLM as LMStudioLLM, Tool, tool } from "@lmstudio/sdk";
+import z, { ZodAny, ZodRawShape } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { Template } from "@huggingface/jinja";
 import { randomUUID } from "crypto";
@@ -24,8 +24,8 @@ class LLM {
   path?: string;
   gguf?: GGUFParseOutput;
   id?: string;
-  toolPrompt: (tools: LLMTool[]) => string;
-  lastEngine: "lmstudio" | "llamafile";
+  toolPrompt: (tools: (LLMTool | Tool)[]) => string;
+  lastEngine?: "lmstudio" | "llamafile";
   lmsClient?: LMStudioClient;
   lmsModel?: LMStudioLLM;
   lmsModelOpts?: BaseLoadModelOpts<LLMLoadModelConfig>;
@@ -57,7 +57,7 @@ For each function call, return a json object with function name and arguments wi
     }
 
     this.gguf = await gguf(this.path, {allowLocalFile: true});
-    this.id = this.gguf?.metadata?.["general.name"]?.replaceAll(" ", "-").toLowerCase();
+    this.id = (this.gguf?.metadata as Record<string, any> | undefined)?.["general.name"]?.replaceAll(" ", "-").toLowerCase();
   }
 
   async loadLMStudio(): Promise<void>;
@@ -125,7 +125,7 @@ For each function call, return a json object with function name and arguments wi
             opts.lmStudio.completionOptions.onFirstToken();
           }
 
-          opts.onFirstToken();
+          opts.onFirstToken!();
         };
       }
 
@@ -135,7 +135,7 @@ For each function call, return a json object with function name and arguments wi
             opts.lmStudio.completionOptions.onPredictionFragment(fragment);
           }
 
-          opts.onToken(fragment.content);
+          opts.onToken!(fragment.content);
         };
       }
 
@@ -146,9 +146,9 @@ For each function call, return a json object with function name and arguments wi
       let completed;
       try {
         completed = await this.lmsModel.complete(text, options);
-      } catch (e) {
-        if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
-          this.lmsModel = await this.lmsClient.llm.model(this.id, this.lmsModelOpts);
+      } catch (e: any) {
+        if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload) && typeof this.id == "string") {
+          this.lmsModel = await this.lmsClient!.llm.model(this.id, this.lmsModelOpts);
           completed = await this.lmsModel.complete(text, options);
         } else {
           throw e;
@@ -163,12 +163,14 @@ For each function call, return a json object with function name and arguments wi
     }
   }
 
-  toolToJson(tool: LLMTool) {
-    const parameters = tool.parameters ? zodToJsonSchema(z.object(tool.parameters)) : tool.customParameters;
-    delete parameters.$schema;
+  toolToJson(tool: LLMTool | Tool) {
+    const parameters = "parameters" in tool ? zodToJsonSchema(z.object(tool.parameters as ZodRawShape)) : (tool as any).customParameters;
+    if (parameters) {
+      delete parameters.$schema;
+    }
 
     return {
-      name: tool.id,
+      name: (tool as any).id,
       description: tool.description,
       parameters
     };
@@ -179,11 +181,11 @@ For each function call, return a json object with function name and arguments wi
       throw new Error("`gguf` is unavailable; call `load` first");
     }
 
-    if (typeof this.gguf.metadata["tokenizer.chat_template"] != "string") {
+    if (typeof (this.gguf.metadata as Record<string, any>)["tokenizer.chat_template"] != "string") {
       throw new Error("This model's chat template is unavailable (is it an LLM?)");
     }
 
-    return applyJinjaTemplate(this.gguf.metadata["tokenizer.chat_template"], vars);
+    return applyJinjaTemplate((this.gguf.metadata as Record<string, any>)["tokenizer.chat_template"], vars);
   }
 }
 
@@ -191,12 +193,19 @@ class LLMChat {
   model?: LLM;
   messages: LLMMessage[];
   generating: boolean;
+  #imageHandles: {[id: string]: FileHandle};
 
   constructor();
   constructor(model: LLM);
   constructor(model?: LLM) {
     this.model = model;
     this.messages = [];
+    this.generating = false;
+    this.#imageHandles = {};
+  }
+
+  clearCache() {
+    this.#imageHandles = {};
   }
 
   clone() {
@@ -246,7 +255,7 @@ class LLMChat {
       throw new Error("`model` is not a valid model");
     }
 
-    const tools = [];
+    const tools: (LLMTool | Tool)[] = [];
     let nativeLevel = 0;
     let text = prompt;
     let role = "user";
@@ -267,15 +276,15 @@ class LLMChat {
       engine = opts.engine ?? this.model.lastEngine;
       maxTokens = opts.maxTokens;
 
-      for (let i = 0; i < opts?.tools?.length; i++) {
-        const toolOpts = opts.tools[i];
+      for (let i = 0; i < (opts?.tools?.length ?? 0); i++) {
+        const toolOpts = opts.tools![i];
 
         if (engine == "lmstudio") {
           if (nativeLevel == 0) {
             const lmsTool = tool({
               name: toolOpts.id,
               description: toolOpts.description,
-              parameters: toolOpts.parameters,
+              parameters: toolOpts.parameters ?? {},
               implementation: (params) => {
                 const result = toolOpts.call?.(params);
                 return result == undefined ? [] : [
@@ -396,7 +405,7 @@ class LLMChat {
 
             if (!started) {
               started = true;
-              opts.onFirstToken();
+              opts.onFirstToken!();
             }
           };
         }
@@ -407,7 +416,7 @@ class LLMChat {
               opts.lmStudio.chatOptions.onPredictionFragment(fragment);
             }
 
-            opts.onToken(fragment.content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: false});
+            opts.onToken!(fragment.content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: false});
           };
           
           options.onToolCallRequestStart = (roundIndex, callId, info) => {
@@ -415,7 +424,7 @@ class LLMChat {
               opts.lmStudio.chatOptions.onToolCallRequestStart(roundIndex, callId, info);
             }
 
-            opts.onToken("<tool_call>\n", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+            opts.onToken!("<tool_call>\n", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
           };
           
           options.onToolCallRequestNameReceived = (roundIndex, callId, name) => {
@@ -423,7 +432,7 @@ class LLMChat {
               opts.lmStudio.chatOptions.onToolCallRequestNameReceived(roundIndex, callId, name);
             }
 
-            opts.onToken("{\"name\":" + JSON.stringify(name) + ",\"arguments\":", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+            opts.onToken!("{\"name\":" + JSON.stringify(name) + ",\"arguments\":", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
           };
           
           options.onToolCallRequestArgumentFragmentGenerated = (roundIndex, callId, content) => {
@@ -431,7 +440,7 @@ class LLMChat {
               opts.lmStudio.chatOptions.onToolCallRequestArgumentFragmentGenerated(roundIndex, callId, content);
             }
 
-            opts.onToken(content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+            opts.onToken!(content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
           };
           
           options.onToolCallRequestFinalized = (roundIndex, callId, info) => {
@@ -439,13 +448,36 @@ class LLMChat {
               opts.lmStudio.chatOptions.onToolCallRequestFinalized(roundIndex, callId, info);
             }
 
-            opts.onToken("}\n</tool_call>", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
+            opts.onToken!("}\n</tool_call>", {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: true});
           };
         }
 
         if (maxTokens != undefined) {
           options.maxTokens = maxTokens;
         }
+
+        const lmsImages = async (images: LLMImage[]): Promise<FileHandle[] | undefined> => {
+          const result: FileHandle[] = [];
+
+          for (let i = 0; i < images.length; i++) {
+            const image = images[i];
+            
+            if (image.id == undefined) {
+              image.id = randomUUID();
+            } else if (this.#imageHandles[image.id]) {
+              result.push(this.#imageHandles[image.id]);
+              continue;
+            }
+            
+            if (image.type == "file") {
+              result.push(this.#imageHandles[image.id] = await this.model!.lmsClient!.files.prepareImage(image.content));
+            } else if (image.type == "base64") {
+              result.push(this.#imageHandles[image.id] = await this.model!.lmsClient!.files.prepareImageBase64(image.name ?? `${image.id}.png`, image.content));
+            }
+          }
+
+          return result.length ? result : undefined;
+        };
         
         const chat = Chat.empty();
         for (let i = 0; i < this.messages.length; i++) {
@@ -454,16 +486,16 @@ class LLMChat {
           if (message.role == "tool") {
             chat.append(ChatMessage.from({role: "tool", content: [{type: "toolCallResult", content: message.content}]}));
           } else {
-            chat.append(message.role, message.content);
+            chat.append({role: message.role, content: message.content, images: await lmsImages(message.images)});
           }
         }
 
         try {
-          await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools : [], options);
-        } catch (e) {
-          if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
-            this.model.lmsModel = await this.model.lmsClient.llm.model(this.model.id, this.model.lmsModelOpts);
-            await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools : [], options);
+          await this.model!.lmsModel!.act(chat, nativeLevel == 0 ? tools as Tool[] : [], options);
+        } catch (e: any) {
+          if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload) && typeof this.model?.id == "string") {
+            this.model.lmsModel = await this.model.lmsClient!.llm.model(this.model.id, this.model.lmsModelOpts);
+            await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools as Tool[] : [], options);
           } else {
             throw e;
           }
@@ -471,7 +503,7 @@ class LLMChat {
       } else if (nativeLevel == 2) {
         const completionPrompt = this.model.applyChatTemplate({
           messages: this.messages.map((message) => ({role: message.role, content: message.content})),
-          tools: tools.map((tool) => this.model.toolToJson(tool)),
+          tools: tools.map((tool) => this.model!.toolToJson(tool)),
           add_generation_prompt: true,
           ...vars
         });
@@ -484,7 +516,7 @@ class LLMChat {
               opts.lmStudio.completionOptions.onFirstToken();
             }
 
-            opts.onFirstToken();
+            opts.onFirstToken!();
           };
         }
 
@@ -494,7 +526,7 @@ class LLMChat {
               opts.lmStudio.completionOptions.onPredictionFragment(fragment);
             }
 
-            opts.onToken(fragment.content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: false});
+            opts.onToken!(fragment.content, {messageIndex: result.length, isNewMessage: isNewMessage(), isToolCall: false});
             lastMessageIndex = result.length;
           };
         }
@@ -505,10 +537,10 @@ class LLMChat {
         
         let completed;
         try {
-          completed = await this.model.lmsModel.complete(completionPrompt, options);
-        } catch (e) {
-          if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
-            this.model.lmsModel = await this.model.lmsClient.llm.model(this.model.id, this.model.lmsModelOpts);
+          completed = await this.model!.lmsModel!.complete(completionPrompt, options);
+        } catch (e: any) {
+          if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload) && typeof this.model?.id == "string") {
+            this.model.lmsModel = await this.model.lmsClient!.llm.model(this.model.id, this.model.lmsModelOpts);
             completed = await this.model.lmsModel.complete(completionPrompt, options);
           } else {
             throw e;
@@ -534,22 +566,33 @@ class LLMChat {
 class LLMMessage {
   role?: "system" | "user" | "assistant" | "tool";
   content: string;
+  images: LLMImage[];
   stats?: LLMMessageStats;
 
-  constructor(content: string);
-  constructor(role: string, content: string);
-  constructor(role: string, content?: string) {
-    if (content === undefined) {
-      content = role;
+  constructor(content?: string);
+  constructor(role?: string, content?: string);
+  constructor(firstArg?: string, secondArg?: string) {
+    let role = firstArg;
+    let content = secondArg;
+
+    if (secondArg === undefined) {
+      role = undefined;
+      content = firstArg;
+    }
+
+    if (firstArg !== undefined && role !== "user" && role !== "assistant" && role !== "system" && role !== "tool") {
       role = undefined;
     }
 
-    if (role !== undefined && role !== "user" && role !== "assistant" && role !== "system" && role !== "tool") {
-      role = undefined;
-    }
+    this.role = role as "system" | "user" | "assistant" | "tool" | undefined;
+    this.content = content ?? "";
+    this.images = [];
+  }
 
-    this.role = role as "system" | "user" | "assistant" | "tool";
-    this.content = content;
+  withImages(...images: LLMImage[]): LLMMessage {
+    this.images.push(...images);
+
+    return this;
   }
 
   clone(): LLMMessage {
@@ -566,6 +609,20 @@ class LLMMessage {
 }
 
 type LLMMessageStats = LLMPredictionStats;
+
+interface LLMImage {
+  /** The type of image link (file or base64). */
+  type: "file" | "base64",
+  /**
+   * The filename. You only have to specify this if using `base64` type.
+   * If this is not done, a random filename will be assigned.
+   */
+  name: string,
+  /** The contents of the file, either as a file path or base64 stream. */
+  content: string,
+  /** ID of the image. This field is automatically filled by llm-helper and used for caching the file handle. */
+  id?: string
+}
 
 interface LLMTool {
   /** The identifier the model will see and call. */

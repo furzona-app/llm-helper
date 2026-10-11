@@ -1,5 +1,5 @@
 import { GGUFParseOutput } from "@huggingface/gguf";
-import { BaseLoadModelOpts, LLMActionOpts, LLMLoadModelConfig, LLMPredictionOpts, LLMPredictionStats, LMStudioClient, LMStudioClientConstructorOpts, LLM as LMStudioLLM } from "@lmstudio/sdk";
+import { BaseLoadModelOpts, LLMActionOpts, LLMLoadModelConfig, LLMPredictionOpts, LLMPredictionStats, LMStudioClient, LMStudioClientConstructorOpts, LLM as LMStudioLLM, Tool } from "@lmstudio/sdk";
 import { ZodAny } from "zod";
 declare function applyJinjaTemplate(template: string, vars: {
     messages?: object[];
@@ -11,8 +11,8 @@ declare class LLM {
     path?: string;
     gguf?: GGUFParseOutput;
     id?: string;
-    toolPrompt: (tools: LLMTool[]) => string;
-    lastEngine: "lmstudio" | "llamafile";
+    toolPrompt: (tools: (LLMTool | Tool)[]) => string;
+    lastEngine?: "lmstudio" | "llamafile";
     lmsClient?: LMStudioClient;
     lmsModel?: LMStudioLLM;
     lmsModelOpts?: BaseLoadModelOpts<LLMLoadModelConfig>;
@@ -29,114 +29,10 @@ declare class LLM {
     }[]): LLMChat;
     complete(prompt: string): Promise<string>;
     complete(prompt: string, opts: LLMCompletionPromptOptions): Promise<string>;
-    toolToJson(tool: LLMTool): {
-        name: string;
+    toolToJson(tool: LLMTool | Tool): {
+        name: any;
         description: string;
-        parameters: ({
-            anyOf: import("zod-to-json-schema").JsonSchema7DateType[];
-        } & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | ({
-            type: "object" | "array";
-        } & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | ({
-            type: ("string" | "number" | "boolean" | "integer" | "null") | ("string" | "number" | "boolean" | "integer" | "null")[];
-        } & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | ({
-            anyOf: import("zod-to-json-schema").JsonSchema7Type[];
-        } & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | (import("zod-to-json-schema").JsonSchema7UndefinedType & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | (import("zod-to-json-schema").JsonSchema7AnyType & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | ({
-            anyOf: [import("zod-to-json-schema").JsonSchema7Type, import("zod-to-json-schema").JsonSchema7NullType];
-        } & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | ({
-            type: [string, "null"];
-        } & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | (import("zod-to-json-schema").JsonSchema7AllOfType & {
-            title?: string;
-            default?: any;
-            description?: string;
-            markdownDescription?: string;
-        } & {
-            $schema?: string | undefined;
-            definitions?: {
-                [key: string]: import("zod-to-json-schema").JsonSchema7Type;
-            };
-        }) | {
-            [param: string]: object;
-        };
+        parameters: any;
     };
     applyChatTemplate(vars: {
         messages?: object[];
@@ -146,11 +42,13 @@ declare class LLM {
     }): string;
 }
 declare class LLMChat {
+    #private;
     model?: LLM;
     messages: LLMMessage[];
     generating: boolean;
     constructor();
     constructor(model: LLM);
+    clearCache(): void;
     clone(): LLMChat;
     addMessage(message: LLMMessage | string): LLMMessage;
     addMessages(messages: (LLMMessage | string)[]): void;
@@ -160,13 +58,28 @@ declare class LLMChat {
 declare class LLMMessage {
     role?: "system" | "user" | "assistant" | "tool";
     content: string;
+    images: LLMImage[];
     stats?: LLMMessageStats;
-    constructor(content: string);
-    constructor(role: string, content: string);
+    constructor(content?: string);
+    constructor(role?: string, content?: string);
+    withImages(...images: LLMImage[]): LLMMessage;
     clone(): LLMMessage;
     resolveRole(history: LLMMessage[]): void;
 }
 type LLMMessageStats = LLMPredictionStats;
+interface LLMImage {
+    /** The type of image link (file or base64). */
+    type: "file" | "base64";
+    /**
+     * The filename. You only have to specify this if using `base64` type.
+     * If this is not done, a random filename will be assigned.
+     */
+    name: string;
+    /** The contents of the file, either as a file path or base64 stream. */
+    content: string;
+    /** ID of the image. This field is automatically filled by llm-helper and used for caching the file handle. */
+    id?: string;
+}
 interface LLMTool {
     /** The identifier the model will see and call. */
     id: string;

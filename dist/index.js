@@ -10,6 +10,7 @@ const sdk_1 = require("@lmstudio/sdk");
 const zod_1 = __importDefault(require("zod"));
 const zod_to_json_schema_1 = require("zod-to-json-schema");
 const jinja_1 = require("@huggingface/jinja");
+const crypto_1 = require("crypto");
 function applyJinjaTemplate(template, vars) {
     return new jinja_1.Template(template).render({
         ...vars,
@@ -122,7 +123,7 @@ For each function call, return a json object with function name and arguments wi
                 completed = await this.lmsModel.complete(text, options);
             }
             catch (e) {
-                if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
+                if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload) && typeof this.id == "string") {
                     this.lmsModel = await this.lmsClient.llm.model(this.id, this.lmsModelOpts);
                     completed = await this.lmsModel.complete(text, options);
                 }
@@ -138,8 +139,10 @@ For each function call, return a json object with function name and arguments wi
         }
     }
     toolToJson(tool) {
-        const parameters = tool.parameters ? (0, zod_to_json_schema_1.zodToJsonSchema)(zod_1.default.object(tool.parameters)) : tool.customParameters;
-        delete parameters.$schema;
+        const parameters = "parameters" in tool ? (0, zod_to_json_schema_1.zodToJsonSchema)(zod_1.default.object(tool.parameters)) : tool.customParameters;
+        if (parameters) {
+            delete parameters.$schema;
+        }
         return {
             name: tool.id,
             description: tool.description,
@@ -161,9 +164,15 @@ class LLMChat {
     model;
     messages;
     generating;
+    #imageHandles;
     constructor(model) {
         this.model = model;
         this.messages = [];
+        this.generating = false;
+        this.#imageHandles = {};
+    }
+    clearCache() {
+        this.#imageHandles = {};
     }
     clone() {
         const chat = new LLMChat();
@@ -221,14 +230,14 @@ class LLMChat {
             }
             engine = opts.engine ?? this.model.lastEngine;
             maxTokens = opts.maxTokens;
-            for (let i = 0; i < opts?.tools?.length; i++) {
+            for (let i = 0; i < (opts?.tools?.length ?? 0); i++) {
                 const toolOpts = opts.tools[i];
                 if (engine == "lmstudio") {
                     if (nativeLevel == 0) {
                         const lmsTool = (0, sdk_1.tool)({
                             name: toolOpts.id,
                             description: toolOpts.description,
-                            parameters: toolOpts.parameters,
+                            parameters: toolOpts.parameters ?? {},
                             implementation: (params) => {
                                 const result = toolOpts.call?.(params);
                                 return result == undefined ? [] : [
@@ -374,6 +383,26 @@ class LLMChat {
                 if (maxTokens != undefined) {
                     options.maxTokens = maxTokens;
                 }
+                const lmsImages = async (images) => {
+                    const result = [];
+                    for (let i = 0; i < images.length; i++) {
+                        const image = images[i];
+                        if (image.id == undefined) {
+                            image.id = (0, crypto_1.randomUUID)();
+                        }
+                        else if (this.#imageHandles[image.id]) {
+                            result.push(this.#imageHandles[image.id]);
+                            continue;
+                        }
+                        if (image.type == "file") {
+                            result.push(this.#imageHandles[image.id] = await this.model.lmsClient.files.prepareImage(image.content));
+                        }
+                        else if (image.type == "base64") {
+                            result.push(this.#imageHandles[image.id] = await this.model.lmsClient.files.prepareImageBase64(image.name ?? `${image.id}.png`, image.content));
+                        }
+                    }
+                    return result.length ? result : undefined;
+                };
                 const chat = sdk_1.Chat.empty();
                 for (let i = 0; i < this.messages.length; i++) {
                     const message = this.messages[i];
@@ -381,14 +410,14 @@ class LLMChat {
                         chat.append(sdk_1.ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", content: message.content }] }));
                     }
                     else {
-                        chat.append(message.role, message.content);
+                        chat.append({ role: message.role, content: message.content, images: await lmsImages(message.images) });
                     }
                 }
                 try {
                     await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools : [], options);
                 }
                 catch (e) {
-                    if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
+                    if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload) && typeof this.model?.id == "string") {
                         this.model.lmsModel = await this.model.lmsClient.llm.model(this.model.id, this.model.lmsModelOpts);
                         await this.model.lmsModel.act(chat, nativeLevel == 0 ? tools : [], options);
                     }
@@ -430,7 +459,7 @@ class LLMChat {
                     completed = await this.model.lmsModel.complete(completionPrompt, options);
                 }
                 catch (e) {
-                    if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload)) {
+                    if (typeof e.message == "string" && e.message.trim().includes("Cannot find model of instance reference. The model might have already been unloaded.") && (opts?.lmStudio?.autoReload === undefined || opts?.lmStudio?.autoReload) && typeof this.model?.id == "string") {
                         this.model.lmsModel = await this.model.lmsClient.llm.model(this.model.id, this.model.lmsModelOpts);
                         completed = await this.model.lmsModel.complete(completionPrompt, options);
                     }
@@ -456,17 +485,25 @@ exports.LLMChat = LLMChat;
 class LLMMessage {
     role;
     content;
+    images;
     stats;
-    constructor(role, content) {
-        if (content === undefined) {
-            content = role;
+    constructor(firstArg, secondArg) {
+        let role = firstArg;
+        let content = secondArg;
+        if (secondArg === undefined) {
             role = undefined;
+            content = firstArg;
         }
-        if (role !== undefined && role !== "user" && role !== "assistant" && role !== "system" && role !== "tool") {
+        if (firstArg !== undefined && role !== "user" && role !== "assistant" && role !== "system" && role !== "tool") {
             role = undefined;
         }
         this.role = role;
-        this.content = content;
+        this.content = content ?? "";
+        this.images = [];
+    }
+    withImages(...images) {
+        this.images.push(...images);
+        return this;
     }
     clone() {
         return new LLMMessage(this.role, this.content);
