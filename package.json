@@ -1,6 +1,6 @@
 {
   "name": "llm-helper",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A package for Node.js focusing on providing a single unified API for interacting with different LLM engines.",
   "main": "dist/index.js",
   "files": [
